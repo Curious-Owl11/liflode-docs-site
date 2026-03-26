@@ -1,0 +1,37 @@
+---
+title: Liflode Knowledge Base
+description: Operational Knowledge Platform — staff-facing documentation hub.
+template: splash
+hero:
+  tagline: Staff-facing documentation for SOPs, onboarding, training, runbooks, and process docs.
+  actions:
+    - text: SOPs
+      link: /sops/
+      icon: right-arrow
+    - text: Onboarding
+      link: /onboarding/
+      icon: right-arrow
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Knowledge Base Sections
+
+<CardGrid stagger>
+	<Card title="SOPs" icon="document">
+		Standard Operating Procedures for day-to-day operations.
+	</Card>
+	<Card title="Onboarding" icon="add-document">
+		Guides and checklists for new staff members.
+	</Card>
+	<Card title="Training" icon="open-book">
+		Training materials and learning resources.
+	</Card>
+	<Card title="Runbooks" icon="setting">
+		Step-by-step operational runbooks for common tasks and incidents.
+	</Card>
+	<Card title="Process Docs" icon="list-format">
+		Documentation of internal workflows and processes.
+	</Card>
+</CardGrid>
