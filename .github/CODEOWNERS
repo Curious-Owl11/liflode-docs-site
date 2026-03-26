@@ -1,0 +1,19 @@
+# CODEOWNERS — liflode-docs-site
+# All doc changes require review from Rachel before merging to main.
+# GitHub automatically requests review from these owners on every PR.
+#
+# Syntax: pattern  owner(s)
+# Patterns are evaluated top to bottom; last match wins.
+
+# Default: all files require Rachel's review
+*                          @rachellaurie
+
+# Operational docs — explicit routing (Rachel is reviewer for all)
+src/content/docs/**        @rachellaurie
+src/content/docs/sops/**   @rachellaurie
+src/content/docs/runbooks/** @rachellaurie
+src/content/docs/process/** @rachellaurie
+
+# Infra / CI config — Rachel still reviews (solo practice)
+.github/**                 @rachellaurie
+astro.config.mjs           @rachellaurie

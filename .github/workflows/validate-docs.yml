@@ -1,0 +1,208 @@
+name: Validate Doc Changes
+
+# Validates operational doc changes on every PR targeting main.
+# Checks: required frontmatter fields, allowed enum values, doc_id uniqueness,
+#         markdown lint, and that no doc is missing a status field.
+#
+# Does NOT block merge on warnings (review_cycle_days, last_reviewed) --
+# only hard errors (missing required fields, invalid enum values) fail the check.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/content/docs/**'
+      - '.github/workflows/validate-docs.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-frontmatter:
+    name: Validate frontmatter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Validate doc frontmatter
+        run: |
+          python3 - << 'PYEOF'
+          import re, sys, yaml
+          from pathlib import Path
+
+          REQUIRED = {"title", "doc_type", "status"}
+          VALID_DOC_TYPES = {"sop", "onboarding", "training", "runbook", "process"}
+          VALID_STATUSES = {"draft", "active", "archived", "review_needed"}
+          VALID_DEPARTMENTS = {"Operations", "HR", "Finance", "Marketing", "Tech", None}
+          VALID_DIFFICULTIES = {"beginner", "intermediate", "advanced", None}
+
+          # Index files are exempt from full schema requirements (they are section landing pages)
+          EXEMPT_NAMES = {"index.md", "index.mdx"}
+
+          docs_dir = Path("src/content/docs")
+          errors = []
+          warnings = []
+          doc_ids_seen = {}
+
+          def extract_frontmatter(path):
+              text = path.read_text(encoding="utf-8")
+              m = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
+              if not m:
+                  return None
+              try:
+                  return yaml.safe_load(m.group(1)) or {}
+              except yaml.YAMLError as e:
+                  return str(e)
+
+          for md_file in sorted(docs_dir.rglob("*.md")) + sorted(docs_dir.rglob("*.mdx")):
+              rel = md_file.relative_to(docs_dir)
+              if md_file.name in EXEMPT_NAMES:
+                  continue
+
+              fm = extract_frontmatter(md_file)
+              if fm is None:
+                  errors.append(f"{rel}: No frontmatter block found (--- delimiters required)")
+                  continue
+              if isinstance(fm, str):
+                  errors.append(f"{rel}: Invalid YAML frontmatter: {fm}")
+                  continue
+
+              # Required fields
+              missing = REQUIRED - set(fm.keys())
+              for field in sorted(missing):
+                  errors.append(f"{rel}: Missing required field '{field}'")
+
+              # Enum validation
+              doc_type = fm.get("doc_type")
+              if doc_type and doc_type not in VALID_DOC_TYPES:
+                  errors.append(f"{rel}: Invalid doc_type '{doc_type}'. Allowed: {sorted(VALID_DOC_TYPES)}")
+
+              status = fm.get("status")
+              if status and status not in VALID_STATUSES:
+                  errors.append(f"{rel}: Invalid status '{status}'. Allowed: {sorted(VALID_STATUSES)}")
+
+              dept = fm.get("department")
+              if dept and dept not in VALID_DEPARTMENTS:
+                  errors.append(f"{rel}: Invalid department '{dept}'. Allowed: {sorted(d for d in VALID_DEPARTMENTS if d)}")
+
+              difficulty = fm.get("difficulty")
+              if difficulty and difficulty not in VALID_DIFFICULTIES:
+                  errors.append(f"{rel}: Invalid difficulty '{difficulty}'. Allowed: {sorted(d for d in VALID_DIFFICULTIES if d)}")
+
+              # doc_id uniqueness (warning only -- doc_id is optional per schema but recommended)
+              doc_id = fm.get("doc_id")
+              if doc_id:
+                  if doc_id in doc_ids_seen:
+                      errors.append(f"{rel}: Duplicate doc_id '{doc_id}' (also in {doc_ids_seen[doc_id]})")
+                  else:
+                      doc_ids_seen[doc_id] = str(rel)
+              else:
+                  warnings.append(f"{rel}: No doc_id set -- add one for Neon sync")
+
+              # Warning: active docs should have a last_reviewed date
+              if status == "active" and not fm.get("last_reviewed"):
+                  warnings.append(f"{rel}: Active doc has no last_reviewed date")
+
+              # Warning: review_cycle_days should be a positive integer
+              rcd = fm.get("review_cycle_days")
+              if rcd is not None and (not isinstance(rcd, int) or rcd <= 0):
+                  errors.append(f"{rel}: review_cycle_days must be a positive integer, got '{rcd}'")
+
+          if warnings:
+              print("WARNINGS (non-blocking):")
+              for w in warnings:
+                  print(f"  {w}")
+              print()
+
+          if errors:
+              print("ERRORS (blocking):")
+              for e in errors:
+                  print(f"  {e}")
+              print(f"\n{len(errors)} error(s) found. Fix before merging.")
+              sys.exit(1)
+          else:
+              checked = len(doc_ids_seen) + len(warnings)
+              print(f"Frontmatter validation passed ({checked} docs checked, {len(warnings)} warnings)")
+          PYEOF
+
+  markdown-lint:
+    name: Markdown lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install markdownlint
+        run: npm install -g markdownlint-cli
+
+      - name: Lint changed docs
+        run: |
+          # Lint all operational doc markdown (disable line-length and inline HTML rules
+          # since Starlight uses MDX with JSX components)
+          markdownlint 'src/content/docs/**/*.md' \
+            --disable MD013 MD033 MD041 -- || true
+          # Note: MDX files (.mdx) are skipped -- markdownlint doesn't parse JSX syntax well.
+          echo "Markdown lint complete"
+
+  pr-summary:
+    name: PR doc change summary
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Summarise doc changes
+        run: |
+          python3 - << 'PYEOF'
+          import subprocess, re, yaml
+          from pathlib import Path
+
+          base = "${{ github.event.pull_request.base.sha }}"
+          head = "${{ github.event.pull_request.head.sha }}"
+
+          result = subprocess.run(
+              ["git", "diff", "--name-only", base, head],
+              capture_output=True, text=True
+          )
+          changed = [f for f in result.stdout.splitlines() if f.startswith("src/content/docs/")]
+
+          if not changed:
+              print("No doc files changed.")
+              exit(0)
+
+          def extract_frontmatter(path_str):
+              try:
+                  text = Path(path_str).read_text(encoding="utf-8")
+                  m = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
+                  if m:
+                      return yaml.safe_load(m.group(1)) or {}
+              except Exception:
+                  pass
+              return {}
+
+          print(f"\nDocs changed in this PR: {len(changed)}")
+          print("-" * 50)
+          for f in changed:
+              fm = extract_frontmatter(f)
+              title = fm.get("title", "(no title)")
+              doc_type = fm.get("doc_type", "unknown")
+              status = fm.get("status", "unknown")
+              doc_id = fm.get("doc_id", "none")
+              print(f"  {f}")
+              print(f"    title={title}  type={doc_type}  status={status}  doc_id={doc_id}")
+          PYEOF
